@@ -1,0 +1,137 @@
+---
+title: "Course 22160: TA position task"
+author: "Jonas Dalsberg Jørgensen (s213551)"
+date: '2023-07-24'
+output:
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Loading packages
+library("tidyverse")
+library("broom")
+```
+
+# Data wrangling
+```{r}
+# Loading the raw Gravier data
+gravier_raw <- read_rds(file = "gravier.rdata")
+
+# 1-4: Creating a Gravier tibble with relocated and recoded "y"
+gravier_clean <- gravier_raw %>%
+  bind_cols %>%
+  as_tibble %>%
+  relocate(y) %>%
+  rename(outcome = y) %>%
+  mutate(outcome = case_when(outcome == "good" ~ 0,
+                             outcome == "poor" ~ 1))
+
+gravier_clean
+```
+\
+```{r}
+# 5: Reformatting the data to a long format
+gravier_data_long <- gravier_clean %>%
+  pivot_longer(cols = -outcome,
+               names_to = "gene",
+               values_to = "log2_expr_level")
+
+gravier_data_long
+```
+\
+```{r}
+# Creating a nested tibble of outcome and gene expression level for each gene for modelling purposes
+gravier_data_long_nested <- gravier_data_long %>%
+  group_by(gene) %>% 
+  nest() %>% 
+  ungroup()
+
+gravier_data_long_nested
+```
+\
+
+```{r}
+# 6: Randomly selecting 100 genes
+set.seed(42)
+gravier_data_long_nested_100 <- gravier_data_long_nested %>% 
+  sample_n(100)
+
+gravier_data_long_nested_100
+```
+
+```{r}
+# 7: Fitting a logistic regression model to each gene
+gravier_data_long_nested_100 <- gravier_data_long_nested_100 %>%
+  mutate(mdl = map(data,
+                   ~glm(outcome ~ log2_expr_level,
+                        data = .,
+                        family = binomial(link = "logit")),
+                   conf.int = TRUE))
+
+gravier_data_long_nested_100
+```
+\
+```{r warning = FALSE}
+# 8: Add beta-estimates and confidence intervals
+
+# Extracting information from the models
+gravier_data_long_nested_100 <- gravier_data_long_nested_100 %>%
+  mutate(mdl_tidy = map(mdl,
+                   ~tidy(.x,
+                         # include confidence intervals (default value 0.95):
+                         conf.int = TRUE))) %>%
+  unnest(mdl_tidy)
+
+# Removing intercept rows and unnecessary columns
+gravier_data_long_nested_100 <- gravier_data_long_nested_100 %>% 
+  filter(term != "(Intercept)") %>% 
+  select(-std.error,
+         -statistic)
+
+gravier_data_long_nested_100
+```
+
+\
+```{r}
+# 9: Add indicator for p-value <= 0.05
+gravier_data_long_nested_100 <- gravier_data_long_nested_100 %>% 
+  mutate(is_significant = case_when(p.value <= 0.05 ~ "significant",
+                                    p.value > 0.05 ~ "n.s."))
+
+gravier_data_long_nested_100
+```
+
+\newpage
+
+# Plotting
+```{r, fig.width=7, fig.height=10}
+# 10-11: Create forest-plot of slopes with 95% CI
+gravier_data_long_nested_100 %>%
+  arrange(desc(estimate)) %>% 
+  mutate(gene=factor(gene, levels=gene)) %>% 
+  ggplot(mapping = aes(x = estimate,
+                       y = gene,
+                       col = is_significant)) +
+  geom_point() +
+  geom_errorbarh(mapping = aes(xmin = conf.low,
+                               xmax = conf.high)) +
+  geom_vline(xintercept = 0) +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(from = -10,
+                                  to = 10,
+                                  by = 1)) +
+  theme(legend.position = "bottom",
+        panel.grid.major.x = element_line(linewidth = .05,
+                                          color = "#EEEEEE")) +
+  labs(col = "Significance") +
+  xlab("Beta1 estimate") +
+  ylab("Gene")
+
+
+```
+
